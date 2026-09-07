@@ -803,6 +803,7 @@ class SQLiteStateStore:
                 raise ValueError("submitted application cannot regress")
             merged = json.loads(existing["payload_json"]) if existing is not None else {}
             merged.update(record)
+            merged["decision_reason"] = reason.strip()
             merged.pop("events", None)
             raw_packet_dir = merged.get("packet_dir")
             canonical_packet: Path | None = None

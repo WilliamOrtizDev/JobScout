@@ -583,6 +583,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
 
             saved = store.get_application_record("JOB-1")
             self.assertEqual(saved["status"], "pending_approval")
+            self.assertEqual(saved["decision_reason"], "Packet compiled")
             self.assertEqual(saved["events"][0]["reason"], "Packet compiled")
             with sqlite3.connect(store.path) as connection:
                 self.assertEqual(
