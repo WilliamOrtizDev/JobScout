@@ -5,6 +5,7 @@ from typing import Any, Callable, Protocol
 
 from .dice import collect_dice_entry
 from .http import JsonResult, TextResult
+from .linkedin import collect_linkedin_entry
 from .models import Candidate, canonical_url_key
 from .sources import (
     normalize_ashby,
@@ -118,6 +119,19 @@ def _collect_entry(
         try:
             return (
                 collect_dice_entry(entry, client, title_filter=title_filter),
+                [],
+                True,
+            )
+        except Exception as error:
+            return [], [SourceFailure(source, tenant, str(error))], False
+    if source == "linkedin":
+        if tenant == "<missing>":
+            return [], [SourceFailure(source, tenant, "missing tenant")], False
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tenant) is None:
+            return [], [SourceFailure(source, tenant, "invalid tenant")], False
+        try:
+            return (
+                collect_linkedin_entry(entry, client, title_filter=title_filter),
                 [],
                 True,
             )
