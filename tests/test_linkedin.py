@@ -78,6 +78,15 @@ class LinkedInParserTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "job URL"):
                     parse_linkedin_search_page(linkedin_card(href=href), tenant="x")
 
+    def test_accepts_linkedin_new_posting_time_class(self):
+        page = linkedin_card().replace(
+            "job-search-card__listdate", "job-search-card__listdate--new"
+        )
+
+        jobs = parse_linkedin_search_page(page, tenant="x")
+
+        self.assertEqual(jobs[0].posted_at, "2026-09-04")
+
     def test_rejects_block_pages_but_accepts_empty_end_page(self):
         with self.assertRaisesRegex(ValueError, "blocked or unexpected"):
             parse_linkedin_search_page("<html>Sign in to continue</html>", tenant="x")

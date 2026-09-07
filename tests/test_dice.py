@@ -117,6 +117,13 @@ class DiceParserTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "blocked|malformed"):
                     parse_dice_search_page(page, tenant="us-remote-contract")
 
+    def test_accepts_explicit_zero_result_page(self):
+        page = "<html><body><main><h1>0 results found</h1><p>No results found</p></main></body></html>"
+
+        self.assertEqual(
+            parse_dice_search_page(page, tenant="us-remote-contract"), []
+        )
+
 
 class DiceCollectorTests(unittest.TestCase):
     def test_queries_exact_filters_paginates_and_deduplicates_across_searches(self):

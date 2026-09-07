@@ -136,6 +136,11 @@ def parse_dice_search_page(html: str, *, tenant: str) -> list[Candidate]:
     if not parser.closed_html or parser.card is not None:
         raise ValueError("malformed Dice HTML")
     if not parser.has_results_container:
+        explicit_zero_results = re.search(
+            r"\b0\s+results\s+found\b", html, re.IGNORECASE
+        ) and re.search(r"\bno\s+results\s+found\b", html, re.IGNORECASE)
+        if explicit_zero_results:
+            return []
         raise ValueError("blocked or unexpected Dice HTML")
 
     jobs: list[Candidate] = []

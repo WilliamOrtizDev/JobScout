@@ -56,7 +56,11 @@ class _LinkedInParser(HTMLParser):
             capture = "company"
         elif "job-search-card__location" in classes:
             capture = "location"
-        elif tag == "time" and "job-search-card__listdate" in classes:
+        elif tag == "time" and any(
+            value == "job-search-card__listdate"
+            or value.startswith("job-search-card__listdate--")
+            for value in classes
+        ):
             self.card["posted_at"] = attrs_dict.get("datetime")
         if capture:
             self.captures.append((capture, self.card_depth, []))
