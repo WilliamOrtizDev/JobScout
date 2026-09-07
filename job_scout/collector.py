@@ -3,7 +3,8 @@ from dataclasses import dataclass
 import re
 from typing import Any, Callable, Protocol
 
-from .http import JsonResult
+from .dice import collect_dice_entry
+from .http import JsonResult, TextResult
 from .models import Candidate, canonical_url_key
 from .sources import (
     normalize_ashby,
@@ -35,6 +36,10 @@ class HttpClient(Protocol):
     def get(
         self, url: str, *, headers: dict[str, str] | None = None
     ) -> JsonResult: ...
+
+    def get_text(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> TextResult: ...
 
 
 def _greenhouse(tenant: str) -> tuple[str, Callable[[Any], list[dict]], Normalizer]:
@@ -105,6 +110,19 @@ def _collect_entry(
         )
     tenant = str(entry.get("tenant") or "<missing>")
     company = str(entry.get("company") or tenant)
+    if source == "dice":
+        if tenant == "<missing>":
+            return [], [SourceFailure(source, tenant, "missing tenant")], False
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", tenant) is None:
+            return [], [SourceFailure(source, tenant, "invalid tenant")], False
+        try:
+            return (
+                collect_dice_entry(entry, client, title_filter=title_filter),
+                [],
+                True,
+            )
+        except Exception as error:
+            return [], [SourceFailure(source, tenant, str(error))], False
     builder = _BUILDERS.get(source)
     if builder is None:
         return [], [SourceFailure(source, tenant, "unsupported source")], False

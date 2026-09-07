@@ -19,6 +19,13 @@ class JsonResult:
     status: int
 
 
+@dataclass(frozen=True)
+class TextResult:
+    text: str
+    from_cache: bool
+    status: int
+
+
 class SafeRedirectHandler(HTTPRedirectHandler):
     """Permit redirects only within the original HTTPS origin."""
 
@@ -73,6 +80,10 @@ class JsonHttpClient:
         key = sha256(url.encode()).hexdigest()
         return self.cache_dir / f"{key}.json", self.cache_dir / f"{key}.meta.json"
 
+    def _text_paths(self, url: str) -> tuple[Path, Path]:
+        key = sha256(url.encode()).hexdigest()
+        return self.cache_dir / f"{key}.html", self.cache_dir / f"{key}.html.meta.json"
+
     def prune(self) -> None:
         """Bound persistent cache entries while no request is using them."""
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -81,28 +92,37 @@ class JsonHttpClient:
             fcntl.flock(global_lock.fileno(), fcntl.LOCK_EX)
             now = time.time()
             body_paths = [
-                path
-                for path in self.cache_dir.glob("*.json")
-                if not path.name.endswith(".meta.json")
+                *[
+                    path
+                    for path in self.cache_dir.glob("*.json")
+                    if not path.name.endswith(".meta.json")
+                ],
+                *self.cache_dir.glob("*.html"),
             ]
             body_paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-            keep = set()
+            kept_sidecars: set[Path] = set()
             for index, body_path in enumerate(body_paths):
                 expired = now - body_path.stat().st_mtime > self.max_cache_age_seconds
+                if body_path.suffix == ".html":
+                    meta_path = body_path.with_name(f"{body_path.name}.meta.json")
+                    lock_path = body_path.with_name(f"{body_path.name}.lock")
+                else:
+                    meta_path = body_path.with_name(f"{body_path.stem}.meta.json")
+                    lock_path = body_path.with_suffix(".lock")
                 if index < self.max_cache_entries and not expired:
-                    keep.add(body_path.stem)
+                    kept_sidecars.update((meta_path, lock_path))
                     continue
                 body_path.unlink(missing_ok=True)
-                body_path.with_name(f"{body_path.stem}.meta.json").unlink(missing_ok=True)
-                body_path.with_suffix(".lock").unlink(missing_ok=True)
+                meta_path.unlink(missing_ok=True)
+                lock_path.unlink(missing_ok=True)
 
             for path in self.cache_dir.glob("*.meta.json"):
-                if path.name.removesuffix(".meta.json") not in keep:
+                if path not in kept_sidecars:
                     path.unlink(missing_ok=True)
             for path in self.cache_dir.glob("*.lock"):
                 if path == global_lock_path:
                     continue
-                if path.name.removesuffix(".lock") not in keep:
+                if path not in kept_sidecars:
                     path.unlink(missing_ok=True)
 
     @staticmethod
@@ -124,6 +144,107 @@ class JsonHttpClient:
         if len(payload) > max_bytes:
             raise ValueError(f"cached JSON exceeds {max_bytes} byte limit")
         return json.loads(payload)
+
+    @staticmethod
+    def _atomic_bytes(path: Path, value: bytes) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(value)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def get_text(
+        self, url: str, *, headers: dict[str, str] | None = None
+    ) -> TextResult:
+        if time.monotonic() >= self._next_prune:
+            self._next_prune = time.monotonic() + 300
+            self.prune()
+        body_path, meta_path = self._text_paths(url)
+        lock_path = body_path.with_suffix(".html.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        global_lock_path = self.cache_dir / ".cache.lock"
+        with global_lock_path.open("a+") as global_lock:
+            fcntl.flock(global_lock.fileno(), fcntl.LOCK_SH)
+            with lock_path.open("a+") as lock:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+                return self._get_text_locked(url, body_path, meta_path, headers, True)
+
+    def _get_text_locked(
+        self,
+        url: str,
+        body_path: Path,
+        meta_path: Path,
+        headers: dict[str, str] | None,
+        allow_cache: bool,
+    ) -> TextResult:
+        request_headers = {"Accept": "text/html", "User-Agent": "job-scout/1.0"}
+        request_headers.update(headers or {})
+        if allow_cache and body_path.exists() and meta_path.exists():
+            try:
+                metadata = self._read_json(meta_path, 64 * 1024)
+                if not isinstance(metadata, dict):
+                    metadata = {}
+            except (json.JSONDecodeError, OSError, ValueError):
+                metadata = {}
+            etag = metadata.get("etag")
+            last_modified = metadata.get("last_modified")
+            if isinstance(etag, str) and etag:
+                request_headers["If-None-Match"] = etag
+            if isinstance(last_modified, str) and last_modified:
+                request_headers["If-Modified-Since"] = last_modified
+        request = Request(url, headers=request_headers)
+        for attempt in range(self.retries + 1):
+            try:
+                with self.opener.open(request, timeout=self.timeout) as response:
+                    payload = response.read(self.max_response_bytes + 1)
+                    if len(payload) > self.max_response_bytes:
+                        raise ValueError(
+                            f"response exceeds {self.max_response_bytes} byte limit"
+                        )
+                    content_type = response.headers.get_content_type()
+                    if content_type != "text/html":
+                        raise ValueError("response is not HTML")
+                    text = payload.decode("utf-8", errors="strict")
+                    self._atomic_bytes(body_path, payload)
+                    self._atomic_json(
+                        meta_path,
+                        {
+                            "etag": response.headers.get("ETag"),
+                            "last_modified": response.headers.get("Last-Modified"),
+                        },
+                    )
+                    return TextResult(text=text, from_cache=False, status=response.status)
+            except HTTPError as error:
+                if error.code == 304 and allow_cache and body_path.exists():
+                    try:
+                        payload = body_path.read_bytes()
+                        if len(payload) > self.max_response_bytes:
+                            raise ValueError("cached HTML exceeds response byte limit")
+                        text = payload.decode("utf-8", errors="strict")
+                    except (OSError, UnicodeDecodeError, ValueError):
+                        body_path.unlink(missing_ok=True)
+                        meta_path.unlink(missing_ok=True)
+                        return self._get_text_locked(
+                            url, body_path, meta_path, headers, False
+                        )
+                    return TextResult(text=text, from_cache=True, status=304)
+                if error.code not in {429, 500, 502, 503, 504} or attempt >= self.retries:
+                    raise
+                retry_after = error.headers.get("Retry-After") if error.headers else None
+                try:
+                    delay = min(float(retry_after), 30.0) if retry_after else 0.5 * 2**attempt
+                except ValueError:
+                    delay = 0.5 * 2**attempt
+                self.sleeper(max(0.0, delay))
+            except (URLError, TimeoutError):
+                if attempt >= self.retries:
+                    raise
+                self.sleeper(0.5 * 2**attempt)
+        raise RuntimeError("unreachable")
 
     def get(self, url: str, *, headers: dict[str, str] | None = None) -> JsonResult:
         if time.monotonic() >= self._next_prune:

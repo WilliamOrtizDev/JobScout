@@ -38,6 +38,7 @@ class Candidate:
     canonical_url: str
     apply_url: str
     raw: dict[str, Any]
+    compensation: str | None = None
 
     def __post_init__(self) -> None:
         for name in (
@@ -54,7 +55,7 @@ class Candidate:
                 raise ValueError(f"{name} must be string")
         if self.remote is not None and not isinstance(self.remote, bool):
             raise ValueError("remote must be boolean or null")
-        for name in ("location", "employment_type", "posted_at"):
+        for name in ("location", "employment_type", "posted_at", "compensation"):
             value = getattr(self, name)
             if value is not None and not isinstance(value, str):
                 raise ValueError(f"{name} must be string or null")
@@ -62,6 +63,8 @@ class Candidate:
     def to_dict(self, *, include_raw: bool = False) -> dict[str, Any]:
         value = asdict(self)
         raw = value.pop("raw")
+        if value["compensation"] is None:
+            value.pop("compensation")
         fingerprint_value = dict(value)
         fingerprint_value["canonical_url"] = canonical_url_key(value["canonical_url"])
         fingerprint_value["apply_url"] = canonical_url_key(value["apply_url"])

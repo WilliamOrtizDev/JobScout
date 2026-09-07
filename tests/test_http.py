@@ -31,6 +31,16 @@ class FakeResponse:
         return False
 
 
+class FakeTextResponse(FakeResponse):
+    def __init__(self, text, *, status=200, headers=None):
+        self.payload = text.encode("utf-8")
+        self.status = status
+        self.headers = Message()
+        self.headers["Content-Type"] = "text/html; charset=utf-8"
+        for key, value in (headers or {}).items():
+            self.headers[key] = value
+
+
 class SequenceOpener:
     def __init__(self, responses):
         self.responses = iter(responses)
@@ -45,6 +55,24 @@ class SequenceOpener:
 
 
 class JsonHttpClientTests(unittest.TestCase):
+    def test_get_text_reuses_cached_html_on_not_modified(self):
+        url = "https://www.dice.com/jobs?q=linux"
+        not_modified = HTTPError(url, 304, "", Message(), None)
+        opener = SequenceOpener(
+            [FakeTextResponse("<html>jobs</html>", headers={"ETag": '\"v1\"'}), not_modified]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            client = JsonHttpClient(Path(directory), opener=opener)
+
+            first = client.get_text(url)
+            second = client.get_text(url)
+
+        self.assertEqual(first.text, "<html>jobs</html>")
+        self.assertFalse(first.from_cache)
+        self.assertEqual(second.text, first.text)
+        self.assertTrue(second.from_cache)
+        self.assertEqual(opener.requests[1].get_header("If-none-match"), '\"v1\"')
+
     def test_rejects_invalid_client_limits(self):
         invalid_options = (
             {"timeout": 0},
