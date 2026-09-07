@@ -1,0 +1,67 @@
+# Secrets and provider credentials
+.env
+.env.*
+!.env.example
+credentials.json
+auth.json
+*.pem
+*.key
+*.p12
+
+# Runtime state and transient search material
+runtime/
+output/
+logs/
+external-workers/
+state/
+*.lock
+*.[dD][bB]
+*.[dD][bB]-*
+*.[sS][qQ][lL][iI][tT][eE]
+*.[sS][qQ][lL][iI][tT][eE]-*
+*.[sS][qQ][lL][iI][tT][eE]3
+*.[sS][qQ][lL][iI][tT][eE]3-*
+/*.html
+/search-*.json
+/search-results*.json
+/scout-*.json
+/latest-search*.json
+/.source_*
+/tmp-verify/
+
+# Candidate-specific and identifying local inputs
+config/search-profile.json
+config/application-profile.json
+config/sources.json
+cron/prompt.md
+cron/job.template.json
+resume/
+applications/
+browser-profiles/
+release-evidence/
+backups/
+*.[tT][aA][rR].[gG][zZ]
+*.[tT][gG][zZ]
+*.[zZ][iI][pP]
+*.[bB][aA][kK]
+*.[bB][aA][cC][kK][uU][pP]
+*.[pP][dD][fF]
+*.[dD][oO][cC]
+*.[dD][oO][cC][mM]
+*.[dD][oO][cC][xX]
+*.[dD][oO][tT][xX]
+skill/continuous-job-search/SKILL.md
+
+# Generated LaTeX artifacts
+*.aux
+*.log
+*.out
+*.synctex.gz
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+.venv-community/

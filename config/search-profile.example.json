@@ -1,0 +1,46 @@
+{
+  "candidate": {
+    "name": "Candidate Name",
+    "location": "City, State",
+    "email": "candidate@example.com",
+    "phone": "+15551234567",
+    "github": "https://github.com/example",
+    "linkedin": "https://linkedin.com/in/example",
+    "portfolio": "https://example.com"
+  },
+  "targets": {
+    "titles": [
+      "Linux Systems Engineer",
+      "Linux Systems Administrator",
+      "Infrastructure Engineer",
+      "Platform Engineer",
+      "Site Reliability Engineer",
+      "SRE",
+      "DevOps Engineer"
+    ],
+    "remote_only": true,
+    "contract_only": true,
+    "engagement_types_allowed": ["1099", "C2C"],
+    "minimum_compensation": {
+      "hourly_usd": 0,
+      "annual_equivalent": 0
+    },
+    "posted_within_days_preferred": 14,
+    "minimum_fit_score": 75,
+    "exclude": []
+  },
+  "sources": {
+    "priority_job_boards": ["LinkedIn Jobs", "Dice", "Indeed"],
+    "application": "Prefer employer careers or ATS pages; use a verified board fallback only when no employer-hosted route exists."
+  },
+  "schedule": {
+    "frequency": "every 15m",
+    "batch_policy": "Deliver every approval-ready packet completed in the run as a separate ordered message with its two PDFs; never throttle delivery to one job per tick.",
+    "overflow_policy": "Leave unprocessed collector leads retryable so the next serialized run resumes them.",
+    "delivery": "configured messaging platform"
+  },
+  "approval": {
+    "required": true,
+    "command": "APPROVE <JOB-ID>"
+  }
+}

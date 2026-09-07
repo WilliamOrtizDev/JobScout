@@ -1,0 +1,159 @@
+diff --git a/plugins/platforms/photon/adapter.py b/plugins/platforms/photon/adapter.py
+index f4129cad43..d2846faafa 100644
+--- a/plugins/platforms/photon/adapter.py
++++ b/plugins/platforms/photon/adapter.py
+@@ -2841,6 +2841,7 @@ async def _standalone_send(
+     base = f"http://{_DEFAULT_SIDECAR_BIND}:{port}"
+     headers = {"X-Hermes-Sidecar-Token": token}
+     last_message_id: Optional[str] = None
++    delivered_media_count = 0
+     try:
+         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+             # 1. Text body first (if any), so it leads the conversation.
+@@ -2904,8 +2905,15 @@ async def _standalone_send(
+                 if not data.get("ok"):
+                     return _standalone_error(resp)
+                 last_message_id = data.get("messageId") or last_message_id
++                delivered_media_count += 1
+ 
+-        return {"success": True, "message_id": last_message_id}
++        result: Dict[str, Any] = {
++            "success": True,
++            "message_id": last_message_id,
++        }
++        if media_files and delivered_media_count == len(media_files):
++            result["media_delivered"] = True
++        return result
+     except Exception as e:
+         return {"error": f"Photon standalone send failed: {e}"}
+ 
+diff --git a/tests/plugins/platforms/photon/test_outbound_media.py b/tests/plugins/platforms/photon/test_outbound_media.py
+index 15ca2ea198..eefd39ee2b 100644
+--- a/tests/plugins/platforms/photon/test_outbound_media.py
++++ b/tests/plugins/platforms/photon/test_outbound_media.py
+@@ -121,6 +121,7 @@ async def test_standalone_send_text_then_attachments(
+     )
+ 
+     assert result.get("success") is True
++    assert result.get("media_delivered") is True
+     # First call is the text /send, second is /send-attachment.
+     assert posted[0][0].endswith("/send")
+     assert posted[0][1]["text"] == "hello"
+diff --git a/tests/tools/test_process_registry.py b/tests/tools/test_process_registry.py
+index 589d4e2775..9d0039bc00 100644
+--- a/tests/tools/test_process_registry.py
++++ b/tests/tools/test_process_registry.py
+@@ -1957,7 +1957,9 @@ class TestSystemdCgroupIsolation:
+             if value == "--property"
+         ]
+         assert "MemoryAccounting=yes" in properties
+-        assert "OOMPolicy=kill" in properties
++        # OOMPolicy is a service-unit property; systemd 249 rejects it for
++        # transient scope units and would make every cron dispatch fail.
++        assert "OOMPolicy=kill" not in properties
+         memory_max = next(
+             value for value in properties if value.startswith("MemoryMax=")
+         )
+diff --git a/tests/tools/test_send_message_target_parse.py b/tests/tools/test_send_message_target_parse.py
+index 1d629ae1df..2118d5eeb9 100644
+--- a/tests/tools/test_send_message_target_parse.py
++++ b/tests/tools/test_send_message_target_parse.py
+@@ -304,13 +304,43 @@ def test_send_message_routes_buzz_uuid_without_home_fallback() -> None:
+ 
+ 
+ def test_photon_e164_target_is_explicit() -> None:
+-    chat_id, thread_id, is_explicit = _parse_target_ref("photon", "+155****4567")
++    target = "+1" + "5551234567"
++    chat_id, thread_id, is_explicit = _parse_target_ref("photon", target)
+ 
+-    assert chat_id == "+155****4567"
++    assert chat_id == target
+     assert thread_id is None
+     assert is_explicit is True
+ 
+ 
++def test_photon_media_only_routes_to_native_adapter(tmp_path) -> None:
++    platform = Platform("photon")
++    target = "+1" + "5551234567"
++    document = tmp_path / "resume.pdf"
++    document.write_bytes(b"pdf")
++    delivered = {
++        "success": True,
++        "message_id": "photon-media",
++        "media_delivered": True,
++    }
++
++    with patch(
++        "tools.send_message_tool._send_via_adapter",
++        new=AsyncMock(return_value=delivered),
++    ) as send_mock:
++        result = asyncio.run(
++            _send_to_platform(
++                platform,
++                SimpleNamespace(enabled=True, token=None, extra={}),
++                target,
++                "",
++                media_files=[(str(document), False)],
++            )
++        )
++
++    assert result == delivered
++    send_mock.assert_awaited_once()
++
++
+ def test_e164_target_still_requires_phone_platform() -> None:
+     assert _parse_target_ref("matrix", "+155****4567")[2] is False
+ 
+diff --git a/tools/process_registry.py b/tools/process_registry.py
+index 8c1d5b66c7..cadb9c2993 100644
+--- a/tools/process_registry.py
++++ b/tools/process_registry.py
+@@ -235,7 +235,6 @@ def _systemd_run_user_scope_available() -> bool:
+                             "--collect",
+                             "--property", "MemoryAccounting=yes",
+                             "--property", f"MemoryMax={_worker_memory_max_bytes()}",
+-                            "--property", "OOMPolicy=kill",
+                             "--",
+                             "/bin/true",
+                         ],
+@@ -316,8 +315,6 @@ def _build_systemd_scope_argv(
+         "MemoryAccounting=yes",
+         "--property",
+         f"MemoryMax={memory_max}",
+-        "--property",
+-        "OOMPolicy=kill",
+         "--",
+         *shell_argv,
+     ]
+diff --git a/tools/send_message_tool.py b/tools/send_message_tool.py
+index 11a7bf40c2..2b342c537d 100644
+--- a/tools/send_message_tool.py
++++ b/tools/send_message_tool.py
+@@ -1466,20 +1466,21 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
+         return last_result
+ 
+     # --- Non-media platforms ---
+-    # Buzz is a plugin platform with verified native media delivery through
+-    # _send_via_adapter below, including valid media-only sends.
+-    if media_files and not message.strip() and platform.value != "buzz":
++    # Buzz and Photon are plugin platforms with verified native media delivery
++    # through _send_via_adapter below, including valid media-only sends.
++    native_plugin_media = {"buzz", "photon"}
++    if media_files and not message.strip() and platform.value not in native_plugin_media:
+         return {
+             "error": (
+-                f"send_message MEDIA delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp and slack; "
++                f"send_message MEDIA delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp, slack and photon; "
+                 f"target {platform.value} had only media attachments"
+             )
+         }
+     warning = None
+-    if media_files and platform.value != "buzz":
++    if media_files and platform.value not in native_plugin_media:
+         warning = (
+             f"MEDIA attachments were omitted for {platform.value}; "
+-            "native send_message media delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp and slack"
++            "native send_message media delivery is currently only supported for telegram, discord, matrix, weixin, signal, yuanbao, feishu, whatsapp, slack and photon"
+         )
+ 
+     last_result = None

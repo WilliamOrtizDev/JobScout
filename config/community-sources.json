@@ -1,0 +1,52 @@
+{
+  "ats_scrapers": [
+    {
+      "name": "ats-scrapers-hosted-dataset",
+      "manifest_url": "https://storage.stapply.ai/jobhive/v1/manifest.json",
+      "max_rows": 5000,
+      "manifest_cache_seconds": 21600,
+      "max_files": 20,
+      "max_dataset_bytes": 167772160,
+      "ats_types": [
+        "bamboohr",
+        "breezy",
+        "cornerstone",
+        "dayforce",
+        "eightfold",
+        "gem",
+        "jobvite",
+        "pageup",
+        "paylocity",
+        "personio",
+        "phenom",
+        "pinpoint",
+        "recruitee",
+        "rippling",
+        "taleo",
+        "teamtailor",
+        "ukg",
+        "workable"
+      ],
+      "require_remote": true,
+      "country_codes": ["US"],
+      "upstream_repository": "https://github.com/kalil0321/ats-scrapers",
+      "upstream_commit": "6b44a1badc9bfbf5cf176f75265cc5729e520e99",
+      "code_license": "MIT",
+      "data_license": "not-separately-stated-by-upstream"
+    }
+  ],
+  "openroles": [
+    {
+      "name": "openroles-public-slim-index",
+      "manifest_url": "https://openroles.today/data/manifest.json",
+      "max_chunks": 16,
+      "max_compressed_bytes": 33554432,
+      "require_remote": true,
+      "country_codes": ["US"],
+      "upstream_repository": "https://github.com/datascry/openroles",
+      "upstream_commit": "bdc0b44972964623fd3ff89cccb2b8a46ff15623",
+      "code_license": "MIT",
+      "data_license": "CC-BY-SA-4.0"
+    }
+  ]
+}

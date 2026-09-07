@@ -1,0 +1,15 @@
+{
+  "name": "Contract Linux job scout",
+  "schedule": "every 15m",
+  "prompt_file": "${JOB_SEARCH_WORKDIR}/cron-prompt.md",
+  "skills": ["continuous-job-search"],
+  "script": "job-scout-shadow.py",
+  "deliver": "${PHOTON_TARGET}",
+  "failure_deliver": "${PHOTON_TARGET}",
+  "enabled_toolsets": ["web", "browser", "terminal", "file", "code_execution"],
+  "workdir": "${JOB_SEARCH_WORKDIR:-$HOME/job-search}",
+  "continuity": false,
+  "attach_to_session": false,
+  "model": null,
+  "provider": null
+}

@@ -1,0 +1,33 @@
+{
+  "status": "configuration_required",
+  "legal_name": "Candidate Name",
+  "preferred_name": "Candidate",
+  "home_location": "City, State",
+  "email": "candidate@example.com",
+  "phone": "+15551234567",
+  "work_authorization_country": null,
+  "authorized_to_work_in_us": null,
+  "requires_sponsorship_now_or_future": null,
+  "citizenship": null,
+  "security_clearance": null,
+  "contract_preferences": {
+    "w2": null,
+    "c2c": null,
+    "c2c_entity_name": null,
+    "1099": null,
+    "minimum_hourly_rate_usd": 0
+  },
+  "availability_date": null,
+  "notice_period": null,
+  "time_zone": null,
+  "willing_to_travel_percent": null,
+  "education": {
+    "degree_completed": null,
+    "status": null,
+    "expected_completion": null
+  },
+  "voluntary_self_identification": "Decline when optional",
+  "approval_policy": {
+    "exact_command": "APPROVE <JOB-ID>"
+  }
+}
