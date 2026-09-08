@@ -64,9 +64,13 @@ JobSpy is not part of the 15-minute path. It is open source and self-hostable, b
 
 ## State progression
 
+Resume and cover-letter drafting is agent-driven. The tracked skill and cron templates specify substantive experience-bullet tailoring, candidate-configurable attestations and inference boundaries, privacy, and cover-letter exclusions. The example application profile leaves attestations unset. Template tests verify instruction propagation through the runtime renderer, not semantic truthfulness or keyword coverage of model output. There is no deterministic semantic tailoring gate.
+
 `discovered -> verification_pending -> verified/rejected -> packet_ready -> pending_approval -> approved -> submitted/blocked`
 
 A successful submission atomically consumes its approval and is terminal. A blocked attempt may resume under the same approval only while its packet revision and application URL remain unchanged. Submission remains outside discovery and requires `APPROVE <JOB-ID>` for the exact packet and exact stored URL. A changed URL or materially changed listing requires re-approval.
+
+Terminal non-viable decisions use `closed` plus a payload `closure_reason` (for example `superseded`), distinct from the candidate's explicit `skipped` decision. Reconcile revision IDs before reporting actionable records and preserve historical blocker evidence and artifacts. Policy updates affect future drafts/revisions, not approved/submitted packets; they do not migrate or rewrite existing application state.
 
 ## Migration gate
 

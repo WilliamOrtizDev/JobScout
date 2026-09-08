@@ -27,6 +27,14 @@
     "expected_completion": null
   },
   "voluntary_self_identification": "Decline when optional",
+  "tailoring_policy": {
+    "master_resume_non_exhaustive": null,
+    "confirmed_experience_domains": [],
+    "allow_in_domain_contextual_inference": null,
+    "technologies_confirmed_at_every_job": [],
+    "employer_context": [],
+    "contrary_facts": []
+  },
   "approval_policy": {
     "exact_command": "APPROVE <JOB-ID>"
   }
