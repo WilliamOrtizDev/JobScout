@@ -70,6 +70,20 @@ class PrefilterTests(unittest.TestCase):
         self.assertFalse(result.keep)
         self.assertIn("title", result.reasons)
 
+    def test_title_acronyms_match_whole_tokens_only(self):
+        profile = {
+            "targets": {
+                "titles": ["ISSO"],
+                "remote_only": True,
+                "contract_only": True,
+            }
+        }
+
+        self.assertTrue(prefilter(candidate(title="Senior ISSO"), profile).keep)
+        result = prefilter(candidate(title="Business Consultant - Missouri"), profile)
+        self.assertFalse(result.keep)
+        self.assertIn("title", result.reasons)
+
     def test_explicit_non_remote_takes_precedence_over_location_text(self):
         result = prefilter(
             candidate(remote=False, location="Remote-friendly team in Dallas"), PROFILE
