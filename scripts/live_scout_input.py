@@ -35,7 +35,7 @@ completed = subprocess.run(
     check=False,
     capture_output=True,
     text=True,
-    timeout=90,
+    timeout=300,
 )
 if completed.returncode != 0:
     print(json.dumps({"collector_error": (completed.stderr or completed.stdout)[-2000:]}))
