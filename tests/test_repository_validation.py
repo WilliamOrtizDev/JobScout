@@ -1,6 +1,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import re
 import subprocess
@@ -24,6 +25,25 @@ def load_validator():
 
 
 class RepositoryValidationTests(unittest.TestCase):
+    def test_example_profile_covers_security_role_families_without_physical_security(self):
+        profile = json.loads((ROOT / "config/search-profile.example.json").read_text())
+        titles = set(profile["targets"]["titles"])
+        required = {
+            "Information Systems Security Engineer",
+            "Cybersecurity Engineer",
+            "Cloud Security Engineer",
+            "Security Automation Engineer",
+            "Information Systems Security Officer",
+            "Cybersecurity Consultant",
+            "Cybersecurity Analyst",
+            "RMF Engineer",
+            "Information Assurance Engineer",
+            "Security Control Assessor",
+        }
+
+        self.assertEqual(required - titles, set())
+        self.assertNotIn("Security Officer", titles)
+
     def test_jobscout_branding_replaces_legacy_project_name(self):
         legacy_slug = "job-search" + "-automation"
         legacy_phrases = (
@@ -307,6 +327,13 @@ SOFTWARE."""
         self.assertNotIn('"--state"', collect)
         self.assertNotIn("load_known_records", pipeline)
         self.assertNotIn("load_known_urls", pipeline)
+
+    def test_live_collector_reads_the_private_workspace_profile(self):
+        live_input = (ROOT / "scripts/live_scout_input.py").read_text()
+
+        self.assertIn('PROFILE = JOB_SEARCH / "search-profile.json"', live_input)
+        self.assertIn('"--profile",', live_input)
+        self.assertIn('str(PROFILE),', live_input)
 
 
     def test_openrouter_key_assignment_is_recognized_as_secret(self):

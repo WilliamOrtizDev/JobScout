@@ -44,9 +44,7 @@ def title_matches(title: str, profile: dict[str, Any]) -> bool:
     targets = _targets(profile)
     normalized_title = _normalized(title)
     target_titles = [_normalized(value) for value in targets.get("titles", [])]
-    return not target_titles or any(
-        value in normalized_title or normalized_title in value for value in target_titles
-    )
+    return not target_titles or any(value in normalized_title for value in target_titles)
 
 
 def prefilter(candidate: Candidate, profile: dict[str, Any]) -> FilterDecision:
