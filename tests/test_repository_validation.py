@@ -334,6 +334,7 @@ SOFTWARE."""
         self.assertIn('PROFILE = JOB_SEARCH / "search-profile.json"', live_input)
         self.assertIn('"--profile",', live_input)
         self.assertIn('str(PROFILE),', live_input)
+        self.assertIn("timeout=300", live_input)
 
 
     def test_openrouter_key_assignment_is_recognized_as_secret(self):
