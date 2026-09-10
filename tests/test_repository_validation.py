@@ -44,6 +44,22 @@ class RepositoryValidationTests(unittest.TestCase):
         self.assertEqual(required - titles, set())
         self.assertNotIn("Security Officer", titles)
 
+    def test_priority_boards_search_security_role_families(self):
+        sources = json.loads((ROOT / "config/sources.example.json").read_text())
+        required = {
+            "information security",
+            "cybersecurity",
+            "information systems security officer",
+            "information assurance",
+            "rmf",
+        }
+
+        for source in ("dice", "linkedin"):
+            with self.subTest(source=source):
+                queries = set(sources[source][0]["queries"])
+                self.assertEqual(required - queries, set())
+                self.assertLessEqual(len(queries), 20)
+
     def test_jobscout_branding_replaces_legacy_project_name(self):
         legacy_slug = "job-search" + "-automation"
         legacy_phrases = (

@@ -1,4 +1,65 @@
 {
+  "dice": [
+    {
+      "tenant": "us-remote-contract",
+      "company": "Dice",
+      "queries": [
+        "linux engineer",
+        "systems engineer",
+        "infrastructure engineer",
+        "cloud engineer",
+        "platform engineer",
+        "devops engineer",
+        "devsecops engineer",
+        "site reliability engineer",
+        "automation engineer",
+        "terraform engineer",
+        "kubernetes engineer",
+        "information security",
+        "cybersecurity",
+        "cloud security",
+        "security automation",
+        "information systems security officer",
+        "information assurance",
+        "rmf",
+        "security compliance",
+        "vulnerability management"
+      ],
+      "page_size": 100,
+      "max_pages": 1,
+      "max_results": 1000
+    }
+  ],
+  "linkedin": [
+    {
+      "tenant": "us-remote-contract",
+      "company": "LinkedIn Jobs",
+      "queries": [
+        "linux engineer",
+        "systems engineer",
+        "infrastructure engineer",
+        "cloud engineer",
+        "platform engineer",
+        "devops engineer",
+        "devsecops engineer",
+        "site reliability engineer",
+        "automation engineer",
+        "terraform engineer",
+        "kubernetes engineer",
+        "information security",
+        "cybersecurity",
+        "cloud security",
+        "security automation",
+        "information systems security officer",
+        "information assurance",
+        "rmf",
+        "security compliance",
+        "vulnerability management"
+      ],
+      "max_pages": 2,
+      "max_results": 1000
+    }
+  ],
   "greenhouse": [],
   "lever": [],
   "ashby": [],
