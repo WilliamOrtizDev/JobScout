@@ -56,6 +56,20 @@ class PrefilterTests(unittest.TestCase):
         self.assertFalse(result.keep)
         self.assertIn("title", result.reasons)
 
+    def test_does_not_broaden_information_security_officer_to_physical_security(self):
+        profile = {
+            "targets": {
+                "titles": ["Information Systems Security Officer"],
+                "remote_only": True,
+                "contract_only": True,
+            }
+        }
+
+        result = prefilter(candidate(title="Security Officer"), profile)
+
+        self.assertFalse(result.keep)
+        self.assertIn("title", result.reasons)
+
     def test_explicit_non_remote_takes_precedence_over_location_text(self):
         result = prefilter(
             candidate(remote=False, location="Remote-friendly team in Dallas"), PROFILE

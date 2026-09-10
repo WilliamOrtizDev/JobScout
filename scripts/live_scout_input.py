@@ -15,10 +15,13 @@ from job_scout.queueing import rotating_batch
 from job_scout.state_store import SQLiteStateStore
 OUTPUT = AUTOMATION / "runtime/live-scout-input.json"
 DATABASE = JOB_SEARCH / "job-scout.db"
+PROFILE = JOB_SEARCH / "search-profile.json"
 collector_python = community_python_executable(AUTOMATION, os.environ)
 command = [
     collector_python,
     str(AUTOMATION / "scripts/collect.py"),
+    "--profile",
+    str(PROFILE),
     "--database",
     str(DATABASE),
     "--output",
