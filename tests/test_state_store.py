@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -31,7 +32,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 }
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
 
-            self.assertGreaterEqual(version, 4)
+            self.assertGreaterEqual(version, 5)
             self.assertTrue(
                 {
                     "application_events",
@@ -40,11 +41,15 @@ class SQLiteStateStoreTests(unittest.TestCase):
                     "verification_attempts",
                     "approvals",
                     "submission_attempts",
+                    "approval_snapshots",
+                    "approval_snapshot_items",
                 }.issubset(tables)
             )
             self.assertEqual(store.stats()["verification_attempts"], 0)
             self.assertEqual(store.stats()["approvals"], 0)
             self.assertEqual(store.stats()["submission_attempts"], 0)
+            self.assertEqual(store.stats()["approval_snapshots"], 0)
+            self.assertEqual(store.stats()["approval_snapshot_items"], 0)
             with sqlite3.connect(store.path) as connection:
                 outbox_columns = {
                     row[1] for row in connection.execute("PRAGMA table_info(delivery_outbox)")
@@ -632,6 +637,339 @@ class SQLiteStateStoreTests(unittest.TestCase):
             self.assertEqual(saved[0], "verified")
             self.assertEqual(saved[1], "https://jobs.example/verify")
             self.assertEqual(json.loads(saved[2]), {"contract": True, "remote": True})
+
+    def test_bulk_approval_cli_emits_acceptance_and_consumes_exact_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "state.db"
+            store = SQLiteStateStore(database)
+            packet = root / "applications" / "CLI-BULK"
+            packet.mkdir(parents=True)
+            url = "https://jobs.example/cli-bulk/apply"
+            (packet / "job.json").write_text(json.dumps({"job_id": "CLI-BULK", "application_url": url}))
+            (packet / "resume.pdf").write_bytes(b"resume")
+            (packet / "cover-letter.pdf").write_bytes(b"cover")
+            store.record_application_decision(
+                "CLI-BULK",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(packet),
+                    "application_url": url,
+                },
+                reason="Packet complete",
+                notify=True,
+            )
+            pending = store.list_outbox("pending")
+            store.mark_outbox_dispatched([pending[0]["outbox_id"]])
+
+            created = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "scripts/state_db.py"),
+                    "--database",
+                    str(database),
+                    "approval-snapshot",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            snapshot = json.loads(created.stdout)
+            self.assertEqual(snapshot["items"][0]["job_id"], "CLI-BULK")
+            self.assertEqual(
+                snapshot["command"], f"APPROVE ALL {snapshot['snapshot_id']}"
+            )
+
+            approved = subprocess.run(
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[1] / "scripts/state_db.py"),
+                    "--database",
+                    str(database),
+                    "approve-snapshot",
+                    snapshot["snapshot_id"],
+                    "--acceptance",
+                    snapshot["command"],
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = json.loads(approved.stdout)
+            self.assertEqual(result["approvals"][0]["job_id"], "CLI-BULK")
+            self.assertEqual(
+                SQLiteStateStore(database).get_application_record("CLI-BULK")["status"],
+                "approved",
+            )
+
+    def test_bulk_approval_snapshot_binds_all_current_pending_jobs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteStateStore(root / "state.db")
+            for job_id in ("BULK-A", "BULK-B"):
+                packet = root / "applications" / job_id
+                packet.mkdir(parents=True)
+                application_url = f"https://jobs.example/{job_id}/apply"
+                (packet / "job.json").write_text(
+                    json.dumps({"job_id": job_id, "application_url": application_url})
+                )
+                (packet / "resume.pdf").write_bytes(f"resume-{job_id}".encode())
+                (packet / "cover-letter.pdf").write_bytes(f"cover-{job_id}".encode())
+                store.record_application_decision(
+                    job_id,
+                    {
+                        "status": "pending_approval",
+                        "packet_dir": str(packet),
+                        "application_url": application_url,
+                    },
+                    reason="Packet complete",
+                    notify=True,
+                )
+            pending = store.list_outbox("pending")
+            store.mark_outbox_dispatched([item["outbox_id"] for item in pending])
+            store.record_application_decision(
+                "NOT-PENDING",
+                {"status": "verification_pending"},
+                reason="Verification incomplete",
+            )
+
+            snapshot = store.create_approval_snapshot()
+
+            self.assertRegex(snapshot["snapshot_id"], r"^[0-9a-f]{32}$")
+            self.assertEqual(
+                snapshot["command"], f"APPROVE ALL {snapshot['snapshot_id']}"
+            )
+            self.assertEqual(
+                [item["job_id"] for item in snapshot["items"]],
+                ["BULK-A", "BULK-B"],
+            )
+            self.assertEqual(
+                [item["application_url"] for item in snapshot["items"]],
+                [
+                    "https://jobs.example/BULK-A/apply",
+                    "https://jobs.example/BULK-B/apply",
+                ],
+            )
+            self.assertTrue(
+                all(
+                    re.fullmatch(r"[0-9a-f]{64}", item["packet_fingerprint"])
+                    for item in snapshot["items"]
+                )
+            )
+            future_packet = root / "applications" / "BULK-FUTURE"
+            future_packet.mkdir(parents=True)
+            future_url = "https://jobs.example/BULK-FUTURE/apply"
+            (future_packet / "job.json").write_text(
+                json.dumps({"job_id": "BULK-FUTURE", "application_url": future_url})
+            )
+            (future_packet / "resume.pdf").write_bytes(b"future-resume")
+            (future_packet / "cover-letter.pdf").write_bytes(b"future-cover")
+            store.record_application_decision(
+                "BULK-FUTURE",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(future_packet),
+                    "application_url": future_url,
+                },
+                reason="Arrived after snapshot",
+                notify=True,
+            )
+            future_outbox = store.list_outbox("pending")
+            store.mark_outbox_dispatched([item["outbox_id"] for item in future_outbox])
+
+            with self.assertRaisesRegex(ValueError, "exact approval snapshot acceptance"):
+                store.approve_snapshot(
+                    snapshot["snapshot_id"], acceptance="APPROVE ALL"
+                )
+            approvals = store.approve_snapshot(
+                snapshot["snapshot_id"], acceptance=snapshot["command"]
+            )
+
+            self.assertEqual([item["job_id"] for item in approvals], ["BULK-A", "BULK-B"])
+            self.assertEqual(store.get_application_record("BULK-A")["status"], "approved")
+            self.assertEqual(store.get_application_record("BULK-B")["status"], "approved")
+            self.assertEqual(
+                store.get_application_record("BULK-FUTURE")["status"],
+                "pending_approval",
+            )
+            self.assertEqual(
+                store.get_application_record("NOT-PENDING")["status"],
+                "verification_pending",
+            )
+            with self.assertRaisesRegex(ValueError, "snapshot is not active"):
+                store.approve_snapshot(
+                    snapshot["snapshot_id"], acceptance=snapshot["command"]
+                )
+
+    def test_bulk_approval_snapshot_fails_atomically_if_any_binding_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteStateStore(root / "state.db")
+            packets = {}
+            for job_id in ("BULK-STABLE", "BULK-CHANGED"):
+                packet = root / "applications" / job_id
+                packet.mkdir(parents=True)
+                packets[job_id] = packet
+                application_url = f"https://jobs.example/{job_id}/apply"
+                (packet / "job.json").write_text(
+                    json.dumps({"job_id": job_id, "application_url": application_url})
+                )
+                (packet / "resume.pdf").write_bytes(b"resume")
+                (packet / "cover-letter.pdf").write_bytes(b"cover")
+                store.record_application_decision(
+                    job_id,
+                    {
+                        "status": "pending_approval",
+                        "packet_dir": str(packet),
+                        "application_url": application_url,
+                    },
+                    reason="Packet complete",
+                    notify=True,
+                )
+            pending = store.list_outbox("pending")
+            store.mark_outbox_dispatched([item["outbox_id"] for item in pending])
+            snapshot = store.create_approval_snapshot()
+            packets["BULK-CHANGED"].joinpath("resume.pdf").write_bytes(b"changed")
+
+            with self.assertRaisesRegex(ValueError, "snapshot binding changed"):
+                store.approve_snapshot(
+                    snapshot["snapshot_id"], acceptance=snapshot["command"]
+                )
+
+            self.assertEqual(
+                store.get_application_record("BULK-STABLE")["status"],
+                "pending_approval",
+            )
+            self.assertEqual(
+                store.get_application_record("BULK-CHANGED")["status"],
+                "pending_approval",
+            )
+            with sqlite3.connect(store.path) as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
+
+    def test_bulk_approval_snapshot_invalidates_after_status_changes_and_reverts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteStateStore(root / "state.db")
+            packet = root / "applications" / "REVERTED"
+            packet.mkdir(parents=True)
+            url = "https://jobs.example/reverted/apply"
+            (packet / "job.json").write_text(json.dumps({"job_id": "REVERTED", "application_url": url}))
+            (packet / "resume.pdf").write_bytes(b"resume")
+            (packet / "cover-letter.pdf").write_bytes(b"cover")
+            store.record_application_decision(
+                "REVERTED",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(packet),
+                    "application_url": url,
+                },
+                reason="Packet complete",
+                notify=True,
+            )
+            pending = store.list_outbox("pending")
+            store.mark_outbox_dispatched([pending[0]["outbox_id"]])
+            snapshot = store.create_approval_snapshot()
+            with sqlite3.connect(store.path) as connection:
+                connection.execute(
+                    "UPDATE application_records SET status = 'verification_pending', "
+                    "payload_json = json_set(payload_json, '$.status', 'verification_pending') "
+                    "WHERE job_id = 'REVERTED'"
+                )
+                connection.execute(
+                    "UPDATE application_records SET status = 'pending_approval', "
+                    "payload_json = json_set(payload_json, '$.status', 'pending_approval') "
+                    "WHERE job_id = 'REVERTED'"
+                )
+
+            with self.assertRaisesRegex(ValueError, "snapshot is not active"):
+                store.approve_snapshot(
+                    snapshot["snapshot_id"], acceptance=snapshot["command"]
+                )
+
+    def test_bulk_approval_snapshot_refuses_payload_status_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteStateStore(root / "state.db")
+            packet = root / "applications" / "DRIFTED"
+            packet.mkdir(parents=True)
+            url = "https://jobs.example/drifted/apply"
+            (packet / "job.json").write_text(json.dumps({"job_id": "DRIFTED", "application_url": url}))
+            (packet / "resume.pdf").write_bytes(b"resume")
+            (packet / "cover-letter.pdf").write_bytes(b"cover")
+            store.record_application_decision(
+                "DRIFTED",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(packet),
+                    "application_url": url,
+                },
+                reason="Packet complete",
+                notify=True,
+            )
+            pending = store.list_outbox("pending")
+            store.mark_outbox_dispatched([pending[0]["outbox_id"]])
+            with sqlite3.connect(store.path) as connection:
+                connection.execute(
+                    "UPDATE application_records SET payload_json = "
+                    "json_set(payload_json, '$.status', 'approved') WHERE job_id = 'DRIFTED'"
+                )
+
+            with self.assertRaisesRegex(ValueError, "status changed"):
+                store.create_approval_snapshot()
+
+    def test_bulk_approval_snapshot_refuses_undispatched_or_empty_sets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = SQLiteStateStore(root / "state.db")
+            with self.assertRaisesRegex(ValueError, "no applications are pending approval"):
+                store.create_approval_snapshot()
+
+            packet = root / "applications" / "NOT-SHOWN"
+            packet.mkdir(parents=True)
+            url = "https://jobs.example/not-shown/apply"
+            (packet / "job.json").write_text(json.dumps({"job_id": "NOT-SHOWN", "application_url": url}))
+            (packet / "resume.pdf").write_bytes(b"resume")
+            (packet / "cover-letter.pdf").write_bytes(b"cover")
+            store.record_application_decision(
+                "NOT-SHOWN",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(packet),
+                    "application_url": url,
+                },
+                reason="Packet complete",
+                notify=True,
+            )
+            with self.assertRaisesRegex(ValueError, "no dispatched applications"):
+                store.create_approval_snapshot()
+
+            shown_packet = root / "applications" / "SHOWN"
+            shown_packet.mkdir(parents=True)
+            shown_url = "https://jobs.example/shown/apply"
+            (shown_packet / "job.json").write_text(
+                json.dumps({"job_id": "SHOWN", "application_url": shown_url})
+            )
+            (shown_packet / "resume.pdf").write_bytes(b"resume")
+            (shown_packet / "cover-letter.pdf").write_bytes(b"cover")
+            store.record_application_decision(
+                "SHOWN",
+                {
+                    "status": "pending_approval",
+                    "packet_dir": str(shown_packet),
+                    "application_url": shown_url,
+                },
+                reason="Packet complete",
+                notify=True,
+            )
+            shown_outbox = [
+                item for item in store.list_outbox("pending") if item["job_id"] == "SHOWN"
+            ]
+            store.mark_outbox_dispatched([shown_outbox[0]["outbox_id"]])
+
+            snapshot = store.create_approval_snapshot()
+
+            self.assertEqual([item["job_id"] for item in snapshot["items"]], ["SHOWN"])
 
     def test_approval_requires_dispatched_immutable_packet_revision(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1344,7 +1682,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
 
             store = SQLiteStateStore(database)
 
-            self.assertEqual(store.stats()["schema_version"], 4)
+            self.assertEqual(store.stats()["schema_version"], 5)
             with sqlite3.connect(database) as connection:
                 self.assertEqual(
                     connection.execute(
@@ -1432,7 +1770,7 @@ class SQLiteStateStoreTests(unittest.TestCase):
                 },
             )
             with sqlite3.connect(database) as connection:
-                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 4)
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 5)
                 payload = connection.execute(
                     "SELECT payload_json FROM application_records WHERE job_id = 'JOB-1'"
                 ).fetchone()[0]

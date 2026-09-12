@@ -83,7 +83,11 @@ Lifecycle commands record decisions, verification evidence, exact-packet approva
     python3 scripts/state_db.py --database /path/to/job-scout.db record JOB-ID --record /path/to/decision.json --reason 'verified decision' --notify --verification /path/to/verification.json
     python3 scripts/state_db.py --database /path/to/job-scout.db verify JOB-ID --outcome verified --source-url https://example.test/job --evidence /path/to/evidence.json
     python3 scripts/state_db.py --database /path/to/job-scout.db approve JOB-ID
+    python3 scripts/state_db.py --database /path/to/job-scout.db approval-snapshot
+    python3 scripts/state_db.py --database /path/to/job-scout.db approve-snapshot SNAPSHOT-ID --acceptance 'APPROVE ALL SNAPSHOT-ID'
     python3 scripts/state_db.py --database /path/to/job-scout.db submit JOB-ID --outcome submitted --confirmation /path/to/confirmation.json
+
+`approval-snapshot` emits an explicitly enumerated, immutable set of every currently pending and previously dispatched exact packet/URL binding plus an `APPROVE ALL <SNAPSHOT-ID>` acceptance command. The acceptance never includes future or non-pending jobs. `approve-snapshot` revalidates every binding and approves the whole set atomically or none.
 
 Packet documents remain private filesystem artifacts confined beneath the applications root. SQLite stores their canonical directory, approval-relevant content fingerprint, lifecycle status, events, approval binding, submission attempts, queue cursor, and delivery-outbox bookkeeping. Approval-ready packet revisions are immutable: material changes use a new revision-specific job ID and generate a new notification. The renderer copies the exact snapshotted resume and cover-letter bytes into a private content-addressed delivery directory before emitting `MEDIA:` paths, preventing later working-packet edits from changing what Hermes opens. Post-approval confirmation evidence may be added without changing the approved revision. A successful submission atomically consumes its approval and submitted state cannot regress; a blocked attempt may resume only with the same active packet-and-URL approval. The outbox uses atomic expiring claims and render-failure recovery. Hermes records downstream Photon delivery separately, so this boundary is intentionally at-least-once rather than an unsupported exactly-once claim.
 

@@ -82,6 +82,8 @@ class WorkflowPolicyTests(unittest.TestCase):
                         "retain current employment", "exactly `N/A`", "date-only",
                         "Present", "future drafts/revisions", "approved", "submitted",
                         "`closed`", "`closure_reason: superseded`", "not `skipped`",
+                        "APPROVE ALL <SNAPSHOT-ID>", "approval-snapshot",
+                        "approve-snapshot", "future jobs", "atomically",
                     ):
                         self.assertIn(rule, text, rule)
             for rule in (
