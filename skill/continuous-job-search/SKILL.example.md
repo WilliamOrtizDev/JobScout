@@ -104,6 +104,8 @@ Return its stdout exactly. The renderer owns outbox claims and immutable deliver
 
 ## Approval and submission
 
+For an approve-all request, first run `python3 {{AUTOMATION}}/scripts/state_db.py --database {{WORKSPACE}}/job-scout.db approval-snapshot`. Present every returned job ID, exact application URL, and packet fingerprint plus the returned `APPROVE ALL <SNAPSHOT-ID>` command. This snapshot includes only currently `pending_approval` jobs whose exact notification was already dispatched; it never covers future jobs, verification-pending jobs, blocked jobs, or changed packets. Do not treat an unqualified “approve all” as approval. Only after the candidate sends the exact displayed command, reopen every listed exact URL and verify it remains live and materially unchanged, then run `approve-snapshot <SNAPSHOT-ID> --acceptance 'APPROVE ALL <SNAPSHOT-ID>'`; it approves the entire immutable snapshot atomically or approves none. If any listing or binding changed, approve none and report the changed item. Submit each approved job under the same per-job checks below.
+
 On `APPROVE <JOB-ID>`:
 
 1. Query SQLite and require `pending_approval`.

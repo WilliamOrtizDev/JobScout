@@ -51,6 +51,20 @@ def main() -> int:
     verifier.add_argument("--evidence", type=Path, required=True)
     approver = commands.add_parser("approve", help="Bind approval to the exact packet and URL")
     approver.add_argument("job_id")
+    commands.add_parser(
+        "approval-snapshot",
+        help="Freeze all current approval-ready exact packet and URL bindings",
+    )
+    bulk_approver = commands.add_parser(
+        "approve-snapshot",
+        help="Atomically approve every exact binding in one approval snapshot",
+    )
+    bulk_approver.add_argument("snapshot_id")
+    bulk_approver.add_argument(
+        "--acceptance",
+        required=True,
+        help="Exact displayed APPROVE ALL <SNAPSHOT-ID> acceptance",
+    )
     submitter = commands.add_parser("submit", help="Record a verified submission outcome")
     submitter.add_argument("job_id")
     submitter.add_argument("--outcome", choices=("submitted", "blocked"), required=True)
@@ -103,6 +117,20 @@ def main() -> int:
         print(json.dumps({"job_id": args.job_id, "verification_id": verification_id}, sort_keys=True))
     elif args.command == "approve":
         print(json.dumps({"job_id": args.job_id, "approval_id": store.approve_application(args.job_id)}, sort_keys=True))
+    elif args.command == "approval-snapshot":
+        print(json.dumps(store.create_approval_snapshot(), sort_keys=True))
+    elif args.command == "approve-snapshot":
+        print(
+            json.dumps(
+                {
+                    "snapshot_id": args.snapshot_id,
+                    "approvals": store.approve_snapshot(
+                        args.snapshot_id, acceptance=args.acceptance
+                    ),
+                },
+                sort_keys=True,
+            )
+        )
     elif args.command == "submit":
         confirmation = (
             json.loads(args.confirmation.read_text()) if args.confirmation is not None else None

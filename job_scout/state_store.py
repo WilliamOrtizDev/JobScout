@@ -14,7 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 VALID_APPLICATION_STATUSES = {
     "discovered",
     "verification_pending",
@@ -614,6 +614,62 @@ class SQLiteStateStore:
                 except Exception:
                     connection.rollback()
                     raise
+            if version < 5:
+                try:
+                    connection.executescript(
+                        """
+                    BEGIN IMMEDIATE;
+                    CREATE TABLE IF NOT EXISTS approval_snapshots (
+                        snapshot_id TEXT PRIMARY KEY,
+                        created_at TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active',
+                        consumed_at TEXT
+                    );
+                    CREATE TABLE IF NOT EXISTS approval_snapshot_items (
+                        snapshot_id TEXT NOT NULL
+                            REFERENCES approval_snapshots(snapshot_id) ON DELETE CASCADE,
+                        ordinal INTEGER NOT NULL,
+                        job_id TEXT NOT NULL
+                            REFERENCES application_records(job_id) ON DELETE CASCADE,
+                        packet_fingerprint TEXT NOT NULL,
+                        application_url TEXT NOT NULL,
+                        approval_id INTEGER REFERENCES approvals(approval_id),
+                        PRIMARY KEY (snapshot_id, job_id),
+                        UNIQUE (snapshot_id, ordinal)
+                    );
+                    CREATE INDEX IF NOT EXISTS approval_snapshot_items_job_idx
+                        ON approval_snapshot_items(job_id, snapshot_id);
+                    CREATE TRIGGER IF NOT EXISTS approval_snapshots_invalidate_record_update
+                    AFTER UPDATE ON application_records
+                    BEGIN
+                        UPDATE approval_snapshots
+                        SET status = 'invalidated'
+                        WHERE status = 'active'
+                          AND EXISTS (
+                              SELECT 1 FROM approval_snapshot_items
+                              WHERE approval_snapshot_items.snapshot_id = approval_snapshots.snapshot_id
+                                AND approval_snapshot_items.job_id = NEW.job_id
+                          );
+                    END;
+                    CREATE TRIGGER IF NOT EXISTS approval_snapshots_invalidate_record_delete
+                    BEFORE DELETE ON application_records
+                    BEGIN
+                        UPDATE approval_snapshots
+                        SET status = 'invalidated'
+                        WHERE status = 'active'
+                          AND EXISTS (
+                              SELECT 1 FROM approval_snapshot_items
+                              WHERE approval_snapshot_items.snapshot_id = approval_snapshots.snapshot_id
+                                AND approval_snapshot_items.job_id = OLD.job_id
+                          );
+                    END;
+                    PRAGMA user_version = 5;
+                    COMMIT;
+                    """
+                    )
+                except Exception:
+                    connection.rollback()
+                    raise
 
     @contextmanager
     def run_lock(self):
@@ -1025,6 +1081,213 @@ class SQLiteStateStore:
                 raise RuntimeError("approval insert did not return an ID")
             return cursor.lastrowid
 
+    def create_approval_snapshot(self) -> dict[str, Any]:
+        """Freeze every currently pending, previously dispatched exact packet binding."""
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        snapshot_id = uuid4().hex
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                "SELECT job_id, payload_json FROM application_records "
+                "WHERE status = 'pending_approval' ORDER BY imported_at, job_id"
+            ).fetchall()
+            if not rows:
+                raise ValueError("no applications are pending approval")
+            items: list[dict[str, str]] = []
+            for row in rows:
+                job_id = str(row["job_id"])
+                record = json.loads(row["payload_json"])
+                if record.get("status") != "pending_approval":
+                    raise ValueError(f"snapshot binding changed for {job_id}: status changed")
+                application_url = record.get("application_url")
+                stored_packet_hash = record.get("packet_fingerprint")
+                if not isinstance(application_url, str) or not application_url:
+                    raise ValueError(f"snapshot binding changed for {job_id}: missing application URL")
+                dispatched = connection.execute(
+                    "SELECT 1 FROM delivery_outbox "
+                    "WHERE job_id = ? AND packet_fingerprint = ? AND application_url = ? "
+                    "AND status IN ('dispatched', 'delivered') LIMIT 1",
+                    (job_id, stored_packet_hash, application_url),
+                ).fetchone()
+                if dispatched is None:
+                    continue
+                packet_hash = packet_fingerprint(
+                    Path(str(record.get("packet_dir") or "")),
+                    applications_root=self.applications_root,
+                )
+                if packet_hash != stored_packet_hash:
+                    raise ValueError(f"snapshot binding changed for {job_id}: packet changed")
+                items.append(
+                    {
+                        "job_id": job_id,
+                        "packet_fingerprint": packet_hash,
+                        "application_url": application_url,
+                    }
+                )
+            if not items:
+                raise ValueError("no dispatched applications are pending approval")
+            connection.execute(
+                "INSERT INTO approval_snapshots (snapshot_id, created_at) VALUES (?, ?)",
+                (snapshot_id, now),
+            )
+            connection.executemany(
+                "INSERT INTO approval_snapshot_items "
+                "(snapshot_id, ordinal, job_id, packet_fingerprint, application_url) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (
+                        snapshot_id,
+                        ordinal,
+                        item["job_id"],
+                        item["packet_fingerprint"],
+                        item["application_url"],
+                    )
+                    for ordinal, item in enumerate(items, 1)
+                ],
+            )
+        return {
+            "snapshot_id": snapshot_id,
+            "command": f"APPROVE ALL {snapshot_id}",
+            "items": items,
+        }
+
+    def approve_snapshot(
+        self, snapshot_id: str, *, acceptance: str
+    ) -> list[dict[str, Any]]:
+        """Atomically approve every exact binding in one immutable snapshot."""
+        if (
+            not isinstance(snapshot_id, str)
+            or len(snapshot_id) != 32
+            or any(character not in "0123456789abcdef" for character in snapshot_id)
+        ):
+            raise ValueError("invalid approval snapshot ID")
+        if acceptance != f"APPROVE ALL {snapshot_id}":
+            raise ValueError("exact approval snapshot acceptance is required")
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            snapshot = connection.execute(
+                "SELECT status FROM approval_snapshots WHERE snapshot_id = ?",
+                (snapshot_id,),
+            ).fetchone()
+            if snapshot is None:
+                raise ValueError(f"unknown approval snapshot: {snapshot_id}")
+            if snapshot["status"] != "active":
+                raise ValueError("approval snapshot is not active")
+            items = connection.execute(
+                "SELECT ordinal, job_id, packet_fingerprint, application_url "
+                "FROM approval_snapshot_items WHERE snapshot_id = ? ORDER BY ordinal",
+                (snapshot_id,),
+            ).fetchall()
+            if not items:
+                raise ValueError("approval snapshot is empty")
+
+            records: list[tuple[sqlite3.Row, dict[str, Any]]] = []
+            for item in items:
+                row = connection.execute(
+                    "SELECT status, payload_json FROM application_records WHERE job_id = ?",
+                    (item["job_id"],),
+                ).fetchone()
+                if row is None or row["status"] != "pending_approval":
+                    raise ValueError(
+                        f"snapshot binding changed for {item['job_id']}: status changed"
+                    )
+                record = json.loads(row["payload_json"])
+                if record.get("status") != "pending_approval":
+                    raise ValueError(
+                        f"snapshot binding changed for {item['job_id']}: status changed"
+                    )
+                packet_hash = packet_fingerprint(
+                    Path(str(record.get("packet_dir") or "")),
+                    applications_root=self.applications_root,
+                )
+                if (
+                    packet_hash != item["packet_fingerprint"]
+                    or record.get("packet_fingerprint") != item["packet_fingerprint"]
+                    or record.get("application_url") != item["application_url"]
+                ):
+                    raise ValueError(
+                        f"snapshot binding changed for {item['job_id']}: packet or URL changed"
+                    )
+                dispatched = connection.execute(
+                    "SELECT 1 FROM delivery_outbox "
+                    "WHERE job_id = ? AND packet_fingerprint = ? AND application_url = ? "
+                    "AND status IN ('dispatched', 'delivered') LIMIT 1",
+                    (
+                        item["job_id"],
+                        item["packet_fingerprint"],
+                        item["application_url"],
+                    ),
+                ).fetchone()
+                if dispatched is None:
+                    raise ValueError(
+                        f"snapshot binding changed for {item['job_id']}: dispatch missing"
+                    )
+                records.append((item, record))
+
+            consuming = connection.execute(
+                "UPDATE approval_snapshots SET status = 'consuming' "
+                "WHERE snapshot_id = ? AND status = 'active'",
+                (snapshot_id,),
+            )
+            if consuming.rowcount != 1:
+                raise ValueError("approval snapshot is not active")
+            approvals: list[dict[str, Any]] = []
+            for item, record in records:
+                connection.execute(
+                    "UPDATE approvals SET status = 'invalidated', invalidated_at = ? "
+                    "WHERE job_id = ? AND status = 'active'",
+                    (now, item["job_id"]),
+                )
+                cursor = connection.execute(
+                    "INSERT INTO approvals "
+                    "(job_id, packet_fingerprint, application_url, approved_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (
+                        item["job_id"],
+                        item["packet_fingerprint"],
+                        item["application_url"],
+                        now,
+                    ),
+                )
+                if cursor.lastrowid is None:
+                    raise RuntimeError("approval insert did not return an ID")
+                approval_id = int(cursor.lastrowid)
+                record["status"] = "approved"
+                connection.execute(
+                    "UPDATE application_records SET status = 'approved', payload_json = ?, "
+                    "imported_at = ? WHERE job_id = ?",
+                    (_json_text(record), now, item["job_id"]),
+                )
+                reason = f"Exact packet approved via snapshot {snapshot_id}"
+                event = {"at": now, "status": "approved", "reason": reason}
+                connection.execute(
+                    "INSERT INTO application_events "
+                    "(job_id, event_key, occurred_at, status, reason, event_json) "
+                    "VALUES (?, ?, ?, 'approved', ?, ?)",
+                    (
+                        item["job_id"],
+                        _fingerprint(event),
+                        now,
+                        reason,
+                        _json_text(event),
+                    ),
+                )
+                connection.execute(
+                    "UPDATE approval_snapshot_items SET approval_id = ? "
+                    "WHERE snapshot_id = ? AND job_id = ?",
+                    (approval_id, snapshot_id, item["job_id"]),
+                )
+                approvals.append({"job_id": item["job_id"], "approval_id": approval_id})
+            updated = connection.execute(
+                "UPDATE approval_snapshots SET status = 'consumed', consumed_at = ? "
+                "WHERE snapshot_id = ? AND status = 'consuming'",
+                (now, snapshot_id),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("approval snapshot is not active")
+            return approvals
+
     def record_submission(
         self,
         job_id: str,
@@ -1379,6 +1642,12 @@ class SQLiteStateStore:
                 ).fetchone()[0],
                 "submission_attempts": connection.execute(
                     "SELECT COUNT(*) FROM submission_attempts"
+                ).fetchone()[0],
+                "approval_snapshots": connection.execute(
+                    "SELECT COUNT(*) FROM approval_snapshots"
+                ).fetchone()[0],
+                "approval_snapshot_items": connection.execute(
+                    "SELECT COUNT(*) FROM approval_snapshot_items"
                 ).fetchone()[0],
             }
 
